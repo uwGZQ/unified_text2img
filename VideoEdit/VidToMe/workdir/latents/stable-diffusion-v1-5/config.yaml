@@ -1,0 +1,23 @@
+sd_version: '1.5'
+model_key: runwayml/stable-diffusion-v1-5
+input_path: /data1/ziqi/unified_text2vid/video.mp4
+work_dir: workdir
+height: 512
+width: 512
+inversion:
+  save_path: workdir/latents
+  prompt: a panda
+  n_frames: null
+  steps: 50
+  save_intermediate: false
+  save_steps: 50
+  use_blip: false
+  recon: false
+  control: none
+  control_scale: 1.0
+  batch_size: 8
+  force: false
+seed: 123
+device: cuda
+float_precision: fp16
+enable_xformers_memory_efficient_attention: true
