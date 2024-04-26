@@ -11,9 +11,9 @@ from PIL import Image
 import sys
 import os
 import torch
-# import sys
-# sys.path.append('t3d')
-# from launch import *
+import sys
+sys.path.append('t3d')
+from launch import *
 
 # Todo: Integrate threestudio into this file
 text2img3d_model = {
