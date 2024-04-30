@@ -14,7 +14,7 @@ from torch import autocast, inference_mode
 imageedit_model = {
     "instructpix2pix":                  ("InstructPix2Pix", "timbrooks/instruct-pix2pix"),
     "ledits-pp-sd":                     ("LEditsPP_sd", "runwayml/stable-diffusion-v1-5"),
-    "ledits-pp-xl":                     ("LEditsPP_sdxl", "stabilityai/stable-diffusion-xl-base-1.0"),
+    "ledits-pp-xl":                     ("LEditsPP_sdxl", ["stabilityai/stable-diffusion-xl-base-1.0", "madebyollin/sdxl-vae-fp16-fix"]),
     "ledits":                           ("LEDITS", "runwayml/stable-diffusion-v1-5"),
     "pix2pix-zero":                     ("Pix2PixZero", ["Salesforce/blip-image-captioning-base", "CompVis/stable-diffusion-v1-4"]),
     "ddim":                             ("DDIM", "CompVis/stable-diffusion-v1-4"),
@@ -62,8 +62,10 @@ class ImageEdit:
             class_name = model.__class__.__name__
             self.model = eval(class_name)(ckpt, precision, torch_device)
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def editimage(self, prompt, image, **kwargs):
+        from diffusers.utils import load_image
+        image = load_image(image).resize((512, 512))
         result = self.model.editimage(prompt=prompt, image = image, **kwargs)
         # vid = [(r * 255).astype("uint8") for r in vid]
         return result
@@ -91,12 +93,19 @@ class LEditsPP_sd(AbstractModel):
         return result[0]
 
 class LEditsPP_sdxl(AbstractModel):
-    def __init__(self, ckpt:str = "stabilityai/stable-diffusion-xl-base-1.0", precision: torch.dtype = torch.float16, device: torch.device = torch.device("cuda")):
+    def __init__(self, ckpt:list = ["stabilityai/stable-diffusion-xl-base-1.0", "madebyollin/sdxl-vae-fp16-fix"], precision: torch.dtype = torch.float16, device: torch.device = torch.device("cuda")):
         from diffusers import LEditsPPPipelineStableDiffusionXL
-        self.pipeline = LEditsPPPipelineStableDiffusionXL.from_pretrained(ckpt, torch_dtype=torch.float16).to(device)
+        if precision == torch.float16:
+            from diffusers import DDIMScheduler, AutoencoderKL
+            print(ckpt)
+            vae = AutoencoderKL.from_pretrained(ckpt[1], torch_dtype=torch.float16)
+            scheduler = DDIMScheduler.from_pretrained(ckpt[0], subfolder="scheduler")
+            self.pipeline = LEditsPPPipelineStableDiffusionXL.from_pretrained(ckpt[0],vae = vae, scheduler=scheduler, torch_dtype = precision, variant="fp16").to(device)
+        elif precision == torch.float32:
+            self.pipeline = LEditsPPPipelineStableDiffusionXL.from_pretrained(ckpt[0], torch_dtype=precision).to(device)
     def editimage(self, prompt, image, **kwargs):
-        max_edge = max(image.size)
-        image = image.resize((max_edge, max_edge))
+        # max_edge = max(image.size)
+        # image = image.resize((max_edge, max_edge))
         _ = self.pipeline.invert(image=image, num_inversion_steps=50, skip=0.2)
         #reverse_editing_direction=[True,False],edit_guidance_scale=[5.0,10.0],edit_threshold=[0.9,0.85],
         result = self.pipeline(editing_prompt=prompt, **kwargs).images
@@ -106,6 +115,7 @@ class LEditsPP_sdxl(AbstractModel):
 class LEDITS(AbstractModel):
     # Currently only support torch.float32
     def __init__(self, ckpt:str = "runwayml/stable-diffusion-v1-5", precision: torch.dtype = torch.float32, device: torch.device = torch.device("cuda")):
+        assert precision == torch.float32
         self.device = device
         from diffusers import StableDiffusionPipeline, DDIMScheduler
         from LEDITS_Utils import SemanticStableDiffusionPipeline
@@ -169,13 +179,16 @@ class LEDITS(AbstractModel):
         source_prompt = ""
         target_prompt = ""
         edit_concepts = []
-        for key in prompt:
-            if "source" in key:
-                source_prompt = prompt[key]
-            elif "target" in key:
-                target_prompt = prompt[key]
-            elif "edit" in key:
-                edit_concepts=prompt[key]
+        if isinstance(prompt, str):
+            edit_concepts = [prompt] * len(edit_guidance_scales)
+        elif isinstance(prompt, dict):
+            for key in prompt:
+                if "source" in key:
+                    source_prompt = prompt[key]
+                elif "target" in key:
+                    target_prompt = prompt[key]
+                elif "edit" in key:
+                    edit_concepts=prompt[key]
                 
         assert len(edit_guidance_scales) == len(warmup_steps) == len(reverse_editing) == len(thresholds) == len(edit_concepts)
 
@@ -200,8 +213,11 @@ class Pix2PixZero(AbstractModel):
         self.pipeline.enable_model_cpu_offload()
         
     def editimage(self, prompt, image, **kwargs):
-        source_prompts = prompt["source_prompts"]
-        target_prompts = prompt["target_prompts"]
+        if isinstance(prompt, str):
+            raise ValueError("Prompt should be a dictionary with 'source_prompt' and 'target_prompt' keys")
+        
+        source_prompts = prompt["source_prompt"]
+        target_prompts = prompt["target_prompt"]
         caption = self.pipeline.generate_caption(image)
         inv_latents = self.pipeline.invert(caption, image=image).latents
         source_embeds = self.pipeline.get_embeds(source_prompts)
@@ -222,6 +238,8 @@ class PromptToPromptDDIM(AbstractModel):
         self.ldm_stable = StableDiffusionPipeline.from_pretrained(ckpt, precision=precision).to(device)
         self.device = device
     def editimage(self, prompt, image, num_diffusion_steps=100, **kwargs):
+        if isinstance(prompt, str):
+            prompt = {"source_prompt": "", "target_prompt": prompt}
         prompt_src = prompt.get("source_prompt","")
         prompt_tar = prompt["target_prompt"] # hope to be a string
         cfg_scale_src = 3.5
@@ -274,7 +292,7 @@ class PromptToPromptDDIM(AbstractModel):
                     return tensor_to_pil(x0_dec)[0]
 
 class DDIM(AbstractModel):
-    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32, num_diffusion_steps=100,device: torch.device = torch.device("cuda")):
+    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32, device: torch.device = torch.device("cuda"), num_diffusion_steps=100,):
         from diffusers import StableDiffusionPipeline, DDIMScheduler
         cfg_scale_src = 3.5
         cfg_scale_tar_list = [15]
@@ -291,6 +309,8 @@ class DDIM(AbstractModel):
         
         self.device = device
     def editimage(self, prompt, image, num_diffusion_steps=100, **kwargs):
+        if isinstance(prompt, str):
+            prompt = {"source_prompt": "", "target_prompt": prompt}
         prompt_src = prompt.get("source_prompt","")
         prompt_tar = prompt["target_prompt"] # hope to be a string
         cfg_scale_src = 3.5
@@ -331,7 +351,7 @@ class DDIM(AbstractModel):
                     return tensor_to_pil(x0_dec)[0]
               
 class PromptToPromptInversion(AbstractModel):
-    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32, num_diffusion_steps = 100, device: torch.device = torch.device("cuda")):
+    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32,  device: torch.device = torch.device("cuda"), num_diffusion_steps = 100,):
         from diffusers import StableDiffusionPipeline, DDIMScheduler
         cfg_scale_src = 3.5
         cfg_scale_tar_list = [15]
@@ -347,6 +367,8 @@ class PromptToPromptInversion(AbstractModel):
         self.num_diffusion_steps = num_diffusion_steps
         self.device = device
     def editimage(self, prompt, image, num_diffusion_steps=100, **kwargs):
+        if isinstance(prompt, str):
+            raise ValueError("Prompt should be a dictionary with 'source_prompt' and 'target_prompt' keys")
         prompt_src = prompt.get("source_prompt","")
         prompt_tar = prompt["target_prompt"] # hope to be a string
         cfg_scale_src = 3.5
@@ -394,7 +416,7 @@ class PromptToPromptInversion(AbstractModel):
                 
                 
 class DDPMInversion(AbstractModel):
-    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32, num_diffusion_steps = 100, device: torch.device = torch.device("cuda")):
+    def __init__(self, ckpt:str = "CompVis/stable-diffusion-v1-4", precision: torch.dtype = torch.float32, device: torch.device = torch.device("cuda"),num_diffusion_steps = 100,):
         from diffusers import StableDiffusionPipeline, DDIMScheduler
         cfg_scale_src = 3.5
         cfg_scale_tar_list = [15]
@@ -410,6 +432,8 @@ class DDPMInversion(AbstractModel):
         self.num_diffusion_steps = num_diffusion_steps
         self.device = device
     def editimage(self, prompt, image, num_diffusion_steps=100, **kwargs):
+        if isinstance(prompt, str):
+            raise ValueError("Prompt should be a dictionary with 'source_prompt' and 'target_prompt' keys")
         prompt_src = prompt.get("source_prompt","")
         prompt_tar = prompt["target_prompt"] # hope to be a string
         cfg_scale_src = 3.5
@@ -448,7 +472,7 @@ class DDPMInversion(AbstractModel):
                     return tensor_to_pil(x0_dec)[0]
 
             
-class ScoreDistillationSampling:
+class ScoreDistillationSampling(AbstractModel):
     def __init__(self, ckpt: str = "runwayml/stable-diffusion-v1-5", precision: torch.dtype = torch.float16, device: torch.device = torch.device("cuda")):
         from diffusers import StableDiffusionPipeline
         self.pipeline = StableDiffusionPipeline.from_pretrained(ckpt, precision=precision).to(device)
@@ -457,8 +481,8 @@ class ScoreDistillationSampling:
         if isinstance(image, Image.Image):
             # img to numpy array
             image = np.array(image)
-        text_source = prompt.get("text_source","")
-        text_target = prompt["text_target"]
+        text_source = prompt.get("source_prompt","")
+        text_target = prompt["target_prompt"]
         
         from DDS_zeroshot_utils import get_text_embeddings, DDSLoss, decode
         from torch.optim.adamw import AdamW
@@ -489,8 +513,9 @@ class ScoreDistillationSampling:
             (2000 * loss).backward()
             optimizer.step()
             
-        out = decode(z_taregt, self.pipeline, im_cat=None)
+        out = decode(z_taregt, self.pipeline, im_cat=image)
         return out
+
 
 
 
@@ -504,8 +529,10 @@ class DDS_zero_shot(AbstractModel):
         if isinstance(image, Image.Image):
             # img to numpy array
             image = np.array(image)
-        text_source = prompt["text_source"]
-        text_target = prompt["text_target"]
+        if isinstance(prompt, str):
+            raise ValueError("Prompt should be a dictionary with 'source_prompt' and 'target_prompt' keys")
+        text_source = prompt["source_prompt"]
+        text_target = prompt["target_prompt"]
         
         from DDS_zeroshot_utils import get_text_embeddings, DDSLoss, decode
         from torch.optim.adamw import AdamW
