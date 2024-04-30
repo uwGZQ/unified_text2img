@@ -1,6 +1,6 @@
-# Unified Text-to-Image / Video Generation and Evaluation Metrics
+# Unified Text-to-Image / Video / 3D Generation, Image / Video Editting and Evaluation Metrics
 
-This repository provides a unified interface for generating images from text prompts using various state-of-the-art models including DALL-E, Stable Diffusion, and many others. It's designed to simplify the process of integrating and switching between different text-to-image models.
+This repository provides a unified interface for generating images / videos from text prompts using various state-of-the-art models including DALL-E, Stable Diffusion, and many others. It's designed to simplify the process of integrating and switching between different text-to-image/videos models.
 
 ## Setup
 
@@ -112,6 +112,42 @@ Text2vid:
 * AnimateLCM
 * AnimateLCM-motion-lora 
 * FreeInit
+
+Text-to-3D:
+* LDM3D
+* LDM3D_4C
+* LDM3D_Pano
+* ShapE
+* Dreamfusion_sd
+* Dreamfusion_if
+* Prolificdreamer
+* Magic3D_if
+* Magic3d-sd
+* SJC
+* LatentNeRF
+* Fantasia3D
+* TextMesh
+* ProlificDreamer_HiFA
+* DreamFusion_HiFA
+
+Image Edit:
+* InstructPix2Pix
+* LEditsPP_sd
+* LEditsPP_sdxl
+* LEDITS
+* Pix2PixZero
+* DDIM
+* PromptToPromptDDIM
+* PromptToPromptInversion
+* DDPMInversion
+* ScoreDistillationSampling
+* DDS_zero_shot
+
+Video Edit:
+* VidtoMe
+* RAVE
+* Flatten
+
 
 Metrics:
 * InceptionScore
